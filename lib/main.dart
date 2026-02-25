@@ -9,6 +9,10 @@ import 'package:siram/data/repositories/HomeRepository.dart';
 import 'package:siram/viewmodel/HomeViewModel.dart';
 import 'package:siram/viewmodel/LoginViewModel.dart';
 import 'view/screens/onboarding/SplashScreen.dart';
+import 'package:siram/view/screens/profile/ProfileScreen.dart';
+import 'package:siram/viewmodel/ProfileViewModel.dart';
+import 'package:siram/data/repositories/ProfileRepository.dart';
+import 'package:siram/data/datasources/remote/ProfileRemoteDataSource.dart';
 
 final GlobalKey<ScaffoldMessengerState> messengerKey =
     GlobalKey<ScaffoldMessengerState>();
@@ -39,6 +43,11 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider<HomeViewModel>(
           create: (_) =>
               HomeViewModel(HomeRepository(HomeRemoteDatasource(apiService))),
+        ),
+        ChangeNotifierProvider<ProfileViewModel>(
+          create: (_) => ProfileViewModel(
+            ProfileRepository(ProfileRemoteDatasource(apiService)),
+          ),
         ),
       ],
       child: MaterialApp(
