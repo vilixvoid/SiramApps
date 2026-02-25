@@ -1,26 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:siram/core/services/ApiServices.dart';
+import 'package:siram/view/screens/auth/LoginScreen.dart';
+import 'package:siram/view/screens/home/HomeScreen.dart';
 import 'package:siram/view/screens/onboarding/OnboardingScreen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Splash Screen App',
-      theme: ThemeData(primarySwatch: Colors.blue),
-      home: const SplashScreen(),
-    );
-  }
-}
-
-// --- Halaman Splash Screen ---
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -39,20 +24,16 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
 
-    // Fade + scale animation
     _fadeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     );
-
     _fadeAnimation = CurvedAnimation(
       parent: _fadeController,
       curve: Curves.easeIn,
     );
-
     _fadeController.forward();
 
-    // Floating animation (naik turun seperti di laut)
     _floatController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -63,13 +44,31 @@ class _SplashScreenState extends State<SplashScreen>
       end: 10,
     ).animate(_floatController);
 
-    // Pindah halaman
-    Timer(const Duration(seconds: 4), () {
+    // ✅ Cek token setelah 3 detik
+    Timer(const Duration(seconds: 3), () => _checkAndNavigate());
+  }
+
+  Future<void> _checkAndNavigate() async {
+    if (!mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('auth_token');
+
+    if (!mounted) return;
+
+    if (token != null && token.isNotEmpty) {
+      // ✅ Sudah login → langsung ke HomeScreen
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const OnboardingScreen()),
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
-    });
+    } else {
+      // ✅ Belum login → ke OnboardingScreen
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+      );
+    }
   }
 
   @override
@@ -83,7 +82,6 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        // 🌊 Background gradasi laut
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -93,10 +91,7 @@ class _SplashScreenState extends State<SplashScreen>
         ),
         child: Stack(
           children: [
-            // 🫧 Bubble background
             const Positioned.fill(child: BubbleBackground()),
-
-            // 🔷 Logo + loading
             Center(
               child: FadeTransition(
                 opacity: _fadeAnimation,
@@ -128,18 +123,6 @@ class _SplashScreenState extends State<SplashScreen>
     );
   }
 }
-// --- Halaman Utama (Tujuan setelah Splash) ---
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Home Screen")),
-      body: const Center(child: Text("Selamat Datang di Aplikasi!")),
-    );
-  }
-}
 
 class BubbleBackground extends StatefulWidget {
   const BubbleBackground({super.key});
@@ -162,6 +145,12 @@ class _BubbleBackgroundState extends State<BubbleBackground>
   }
 
   @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _controller,
@@ -179,7 +168,6 @@ class BubblePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..color = Colors.white.withOpacity(0.25);
-
     for (int i = 0; i < 12; i++) {
       final x = (i * 30.0 + progress * 100) % size.width;
       final y = size.height - (progress * size.height + i * 60);

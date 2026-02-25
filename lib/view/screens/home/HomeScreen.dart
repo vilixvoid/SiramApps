@@ -1,7 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:siram/view/navigation/NavigationBottom.dart';
+import 'package:siram/view/widgets/CalendarWidget.dart';
+import 'package:siram/view/widgets/HeaderWidget.dart';
+import 'package:siram/view/widgets/VisitCardWidget.dart';
+import 'package:siram/viewmodel/HomeViewModel.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<HomeViewModel>().fetchWorkOrders();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -9,7 +32,6 @@ class HomeScreen extends StatelessWidget {
       backgroundColor: const Color(0xFFF8FAFB),
       body: Stack(
         children: [
-          // 1. Blue Background Header
           Container(
             height: 300,
             decoration: const BoxDecoration(
@@ -20,59 +42,13 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ),
-
           SafeArea(
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 2. Profile & Notification Header
-                  Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: const [
-                            Text(
-                              "Good Morning",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                              ),
-                            ),
-                            SizedBox(height: 4),
-                            Text(
-                              "Mayhesta Gilang\nMaulana",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                height: 1.2,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.notifications_none,
-                            color: Color(0xFF7BCEF5),
-                            size: 30,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // 3. Calendar Card
+                  const HeaderWidget(),
                   const CalendarWidget(),
-
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                     child: Text(
@@ -83,276 +59,131 @@ class HomeScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  Consumer<HomeViewModel>(
+                    builder: (_, viewModel, __) {
+                      // Loading
+                      if (viewModel.isLoading) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: CircularProgressIndicator(
+                              color: Color(0xFF7BCEF5),
+                            ),
+                          ),
+                        );
+                      }
 
-                  // 4. List of Visits
-                  const VisitCard(
-                    name: "John Doe",
-                    priority: "High Priority",
-                    priorityColor: Color(0xFFFFC5C5),
-                    textColor: Color(0xFFD32F2F),
+                      // Error
+                      if (viewModel.state == HomeState.error) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Column(
+                              children: [
+                                Text(
+                                  viewModel.errorMessage,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.red),
+                                ),
+                                const SizedBox(height: 12),
+                                ElevatedButton(
+                                  onPressed: () => viewModel.fetchWorkOrders(),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF7BCEF5),
+                                  ),
+                                  child: const Text(
+                                    "Coba Lagi",
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
+                      // Kosong
+                      if (viewModel.workOrders.isEmpty) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 32,
+                            ),
+                            child: Column(
+                              children: [
+                                Icon(
+                                  Icons.event_busy,
+                                  size: 48,
+                                  color: Colors.grey,
+                                ),
+                                SizedBox(height: 12),
+                                Text(
+                                  "Tidak ada kunjungan\npada tanggal ini",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
+                      // Data
+                      return Column(
+                        children: viewModel.workOrders
+                            .map(
+                              (wo) => VisitCard(
+                                name: wo.customerName,
+                                priority: wo.priority,
+                                priorityColor: _getPriorityColor(wo.priority),
+                                textColor: _getPriorityTextColor(wo.priority),
+                                status: wo.status, // ✅ dari API
+                                timeStart: wo.woTime,
+                                timeEnd: wo.estTime,
+                                address: wo.address,
+                                woDate: wo.woDate, // ✅ dari API
+                                woName: wo.woName, // ✅ dari API
+                                showArrow: true,
+                              ),
+                            )
+                            .toList(),
+                      );
+                    },
                   ),
-                  const VisitCard(
-                    name: "John Doe",
-                    priority: "Medium Priority",
-                    priorityColor: Color(0xFFF0E199),
-                    textColor: Color(0xFF8D7701),
-                    showArrow: true,
-                  ),
-                  const SizedBox(
-                    height: 100,
-                  ), // Padding bawah agar tidak tertutup nav bar
+                  const SizedBox(height: 100),
                 ],
               ),
             ),
           ),
         ],
       ),
-
-      // 5. Custom Bottom Navigation Bar
-      bottomNavigationBar: const CustomNavBar(),
-    );
-  }
-}
-
-// --- Widget Kalender Sederhana ---
-class CalendarWidget extends StatelessWidget {
-  const CalendarWidget({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 24),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Icon(Icons.chevron_left, color: Colors.grey),
-              Text(
-                "September 2021",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-              Icon(Icons.chevron_right, color: Colors.grey),
-            ],
-          ),
-          const SizedBox(height: 15),
-          // Baris Hari (S M T W T F S)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: ["SAN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
-                .map(
-                  (d) => Text(
-                    d,
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                )
-                .toList(),
-          ),
-          const SizedBox(height: 15),
-          // Contoh Baris Angka (Hanya menampilkan baris terpilih sesuai gambar)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildDate("15"),
-              _buildDate("16"),
-              _buildDate("17"),
-              _buildDate("18"),
-              _buildDate("19", isSelected: true),
-              _buildDate("20"),
-              _buildDate("21"),
-            ],
-          ),
-        ],
+      bottomNavigationBar: NavigationBottom(
+        currentIndex: _currentIndex,
+        onTap: (index) => setState(() => _currentIndex = index),
       ),
     );
   }
 
-  Widget _buildDate(String date, {bool isSelected = false}) {
-    return Container(
-      width: 35,
-      height: 35,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: isSelected ? const Color(0xFFF25723) : Colors.transparent,
-        shape: BoxShape.circle,
-      ),
-      child: Text(
-        date,
-        style: TextStyle(
-          color: isSelected ? Colors.white : Colors.black,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
-// --- Widget Card Kunjungan ---
-class VisitCard extends StatelessWidget {
-  final String name;
-  final String priority;
-  final Color priorityColor;
-  final Color textColor;
-  final bool showArrow;
-
-  const VisitCard({
-    super.key,
-    required this.name,
-    required this.priority,
-    required this.priorityColor,
-    required this.textColor,
-    this.showArrow = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10),
-        ],
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    _buildLabel(priority, priorityColor, textColor),
-                    const SizedBox(width: 8),
-                    _buildLabel(
-                      "Assigned",
-                      const Color(0xFFD3EAE7),
-                      const Color(0xFF55938D),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: const [
-                    Icon(Icons.access_time, size: 16, color: Color(0xFF7BCEF5)),
-                    SizedBox(width: 5),
-                    Text(
-                      "8:00 AM - 10:00 AM",
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 5),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Icon(Icons.location_on, size: 16, color: Color(0xFF7BCEF5)),
-                    SizedBox(width: 5),
-                    Expanded(
-                      child: Text(
-                        "Jl. Malabar 3 Tangerang: Berlokasi di Cibodasari,\nKec. Cibodas, Kota Tangerang, Banten",
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (showArrow) const Icon(Icons.chevron_right, color: Colors.grey),
-        ],
-      ),
-    );
+  Color _getPriorityColor(String priority) {
+    switch (priority.toLowerCase()) {
+      case 'high':
+        return const Color(0xFFFFC5C5);
+      case 'medium':
+        return const Color(0xFFF0E199);
+      default:
+        return const Color(0xFFD3EAE7);
+    }
   }
 
-  Widget _buildLabel(String text, Color bg, Color textC) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: textC,
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-}
-
-// --- Widget Bottom Navigation ---
-class CustomNavBar extends StatelessWidget {
-  const CustomNavBar({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 90,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(30),
-          topRight: Radius.circular(30),
-        ),
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _navItem(Icons.home_filled, "Home", true),
-          _navItem(Icons.account_circle, "Profile", false),
-        ],
-      ),
-    );
-  }
-
-  Widget _navItem(IconData icon, String label, bool isActive) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(
-          icon,
-          size: 35,
-          color: isActive
-              ? const Color(0xFF7BCEF5)
-              : Colors.grey.withOpacity(0.5),
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            color: isActive
-                ? const Color(0xFF7BCEF5)
-                : Colors.grey.withOpacity(0.5),
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
-    );
+  Color _getPriorityTextColor(String priority) {
+    switch (priority.toLowerCase()) {
+      case 'high':
+        return const Color(0xFFD32F2F);
+      case 'medium':
+        return const Color(0xFF8D7701);
+      default:
+        return const Color(0xFF55938D);
+    }
   }
 }
