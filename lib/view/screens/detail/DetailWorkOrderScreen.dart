@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
-import 'package:siram/core/services/ApiServices.dart'; // ✅ sesuaikan path
+import 'package:siram/core/services/ApiServices.dart';
 
 class DetailWorkOrderScreen extends StatefulWidget {
   final int workOrderId;
@@ -42,13 +44,8 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
 
   late final ApiService _apiService;
 
-  // ✅ TODO: Ganti dengan base URL S3 yang benar dari backend
-  // Format akhir URL foto = _s3BaseUrl + s3_path
-  // Contoh: 'https://siram-bucket.s3.ap-southeast-1.amazonaws.com/'
-  // Tanyakan ke backend: curl https://siram.watercare.co.id/api/data/detailWorkOrder/7808
-  // lalu cek apakah ada field 's3_base_url' atau tanyakan langsung ke developer backend
-  static const String _s3BaseUrl =
-      'https://siram.watercare.co.id/storage/'; // ← GANTI INI
+  // URL base untuk storage — sudah confirmed bisa diakses dengan Bearer token
+  static const String _s3BaseUrl = 'https://siram.watercare.co.id/storage/';
 
   @override
   void initState() {
@@ -57,7 +54,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     _fetchDetail();
   }
 
-  // ─── Fetch Data ─────────────────────────────────────────────────────────────
+  // ─── Fetch ───────────────────────────────────────────────────────────────
   Future<void> _fetchDetail() async {
     setState(() {
       _isLoading = true;
@@ -71,26 +68,10 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
       setState(() {
         _data = data;
         _isLoading = false;
-        final notes = data['workOrder']?['notes_technician'] ?? '';
-        _notesController.text = notes.toString();
+        _notesController.text = (data['workOrder']?['notes_technician'] ?? '')
+            .toString();
       });
-
-      // ─── DEBUG: print semua URL foto ──────────────────────────────────────
-      // Hapus blok ini setelah foto sudah muncul dengan benar
-      debugPrint('=== DEBUG FOTO ===');
-      debugPrint('podBefore  : ${data['podBefore']}');
-      debugPrint('podAfter   : ${data['podAfter']}');
-      final imgs = data['quotationImage'] as List? ?? [];
-      debugPrint('quotationImage count: ${imgs.length}');
-      for (var img in imgs) {
-        final url = '$_s3BaseUrl${img['s3_path']}';
-        debugPrint(
-          '  → id=${img['quotation_image_id']} size=${img['pod_size']} type=${img['pod_type']}',
-        );
-        debugPrint('    URL: $url');
-      }
-      debugPrint('==================');
-      // ─────────────────────────────────────────────────────────────────────
+      _debugPhotos(data);
     } catch (e) {
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
@@ -99,63 +80,88 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  // ─── Helper: Build photo URL ─────────────────────────────────────────────
-  /// Jika s3_path sudah berupa URL lengkap (http://...) → pakai langsung
-  /// Jika relatif → gabungkan dengan _s3BaseUrl
-  String _buildPhotoUrl(String? s3Path) {
-    if (s3Path == null || s3Path.isEmpty) return '';
-    if (s3Path.startsWith('http://') || s3Path.startsWith('https://')) {
-      return s3Path; // sudah URL lengkap
+  void _debugPhotos(Map<String, dynamic> data) {
+    debugPrint('════ DEBUG FOTO WO #${widget.workOrderId} ════');
+    final pods = data['workOrderPod'] as List? ?? [];
+    debugPrint('workOrderPod count: ${pods.length}');
+    for (final p in pods) {
+      if (p is! Map) continue;
+      debugPrint(
+        '  pod id=${p['work_order_pod_id']} type=${p['type']} '
+        's3_url="${p['s3_url']}" s3_path="${p['s3_path']}" '
+        'pod_data_len=${(p['pod_data']?.toString().length ?? 0)}',
+      );
     }
-    final base = _s3BaseUrl.endsWith('/') ? _s3BaseUrl : '$_s3BaseUrl/';
-    final path = s3Path.startsWith('/') ? s3Path.substring(1) : s3Path;
-    return '$base$path';
+    final imgs = data['quotationImage'] as List? ?? [];
+    debugPrint('quotationImage count: ${imgs.length}');
+    debugPrint('════════════════════════════════════════');
   }
 
-  // ─── Helper: Extract photo URL from various formats ──────────────────────
-  /// API bisa return podBefore/podAfter dalam berbagai format:
-  /// - null        → tidak ada foto
-  /// - String      → URL langsung atau s3_path relatif
-  /// - Map         → {type, s3_path, url, ...} — print keys untuk debug
-  String _extractPhotoUrl(dynamic raw) {
-    if (raw == null) return '';
+  // ─── URL / Pod helpers ────────────────────────────────────────────────────
+  String _buildPhotoUrl(String? s3Path) {
+    if (s3Path == null || s3Path.trim().isEmpty) return '';
+    final t = s3Path.trim();
+    if (t.startsWith('http://') || t.startsWith('https://')) return t;
+    final base = _s3BaseUrl.endsWith('/') ? _s3BaseUrl : '$_s3BaseUrl/';
+    return '$base${t.startsWith('/') ? t.substring(1) : t}';
+  }
 
-    if (raw is String) {
-      return raw.isEmpty ? '' : _buildPhotoUrl(raw);
-    }
-
-    if (raw is Map) {
-      debugPrint('📦 Pod Map keys: ${raw.keys.toList()} | values: $raw');
-
-      // Coba semua kemungkinan field URL
-      for (final key in [
-        'url',
-        'file_url',
-        's3_url',
-        'full_url',
-        'image_url',
-        'photo_url',
-        'path',
-        'file_path',
-      ]) {
-        final val = raw[key]?.toString() ?? '';
-        if (val.isNotEmpty) return _buildPhotoUrl(val);
+  /// Cari URL (s3_url atau s3_path) dari workOrderPod berdasarkan type.
+  /// Return '' jika tidak ada URL tapi ada pod_data — pakai _findPodBase64.
+  String _findPodUrl(String type) {
+    final List pods = _data?['workOrderPod'] as List? ?? [];
+    final String t = type.toLowerCase().trim();
+    for (final pod in pods) {
+      if (pod is! Map) continue;
+      if ((pod['type']?.toString().toLowerCase().trim() ?? '') != t) continue;
+      for (final key in ['s3_url', 'url', 'file_url', 'full_url', 's3_path']) {
+        final val = pod[key]?.toString().trim() ?? '';
+        if (val.isNotEmpty) {
+          debugPrint('pod "$type" URL via "$key": $val');
+          return _buildPhotoUrl(val);
+        }
       }
-
-      // Fallback ke s3_path
-      final s3 = raw['s3_path']?.toString() ?? '';
-      if (s3.isNotEmpty) return _buildPhotoUrl(s3);
-
-      // Fallback ke pod_name (jarang, tapi bisa saja)
-      final name = raw['pod_name']?.toString() ?? '';
-      if (name.isNotEmpty) return _buildPhotoUrl(name);
+      // Pod ada tapi semua URL kosong → ada pod_data, return '' agar pakai base64
+      return '';
     }
-
-    debugPrint('⚠️ Tidak bisa ekstrak URL dari: $raw (${raw.runtimeType})');
     return '';
   }
 
-  // ─── Upload Photo Before ─────────────────────────────────────────────────
+  /// Ambil pod_data (base64 JPEG) — primary source ketika s3_url kosong.
+  String? _findPodBase64(String type) {
+    final List pods = _data?['workOrderPod'] as List? ?? [];
+    final String t = type.toLowerCase().trim();
+    for (final pod in pods) {
+      if (pod is! Map) continue;
+      if ((pod['type']?.toString().toLowerCase().trim() ?? '') != t) continue;
+      final data = pod['pod_data']?.toString().trim() ?? '';
+      if (data.isNotEmpty) return data;
+    }
+    return null;
+  }
+
+  /// Apakah ada pod (before/after) di workOrderPod?
+  bool _hasPod(String type) {
+    final List pods = _data?['workOrderPod'] as List? ?? [];
+    final String t = type.toLowerCase().trim();
+    for (final pod in pods) {
+      if (pod is! Map) continue;
+      if ((pod['type']?.toString().toLowerCase().trim() ?? '') == t)
+        return true;
+    }
+    return false;
+  }
+
+  bool _isValidImage(Map img) {
+    final s3Path = img['s3_path']?.toString() ?? '';
+    if (s3Path.isEmpty) return false;
+    final podSize = int.tryParse(img['pod_size']?.toString() ?? '0') ?? 0;
+    final podType = img['pod_type']?.toString() ?? '';
+    if (podSize == 0 && !podType.startsWith('image/')) return false;
+    return true;
+  }
+
+  // ─── Upload Before ───────────────────────────────────────────────────────
   Future<void> _pickPhotoBefore() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
@@ -169,10 +175,9 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     setState(() => _isUploadingBefore = true);
     try {
       await _apiService.loadToken();
-      final baseUrl = _apiService.baseUrl;
       final request = http.MultipartRequest(
         'POST',
-        Uri.parse('$baseUrl/data/uploadPhotoBefore'),
+        Uri.parse('${_apiService.baseUrl}/data/uploadPhotoBefore'),
       );
       request.headers['Authorization'] = 'Bearer ${widget.token}';
       request.fields['work_order_id'] = widget.workOrderId.toString();
@@ -200,7 +205,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  // ─── Upload Photo After ──────────────────────────────────────────────────
+  // ─── Upload After ────────────────────────────────────────────────────────
   Future<void> _pickPhotoAfter() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
@@ -214,10 +219,9 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     setState(() => _isUploadingAfter = true);
     try {
       await _apiService.loadToken();
-      final baseUrl = _apiService.baseUrl;
       final request = http.MultipartRequest(
         'POST',
-        Uri.parse('$baseUrl/data/uploadPhotoAfter'),
+        Uri.parse('${_apiService.baseUrl}/data/uploadPhotoAfter'),
       );
       request.headers['Authorization'] = 'Bearer ${widget.token}';
       request.fields['work_order_id'] = widget.workOrderId.toString();
@@ -264,12 +268,10 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
   // ─── Checkin / Checkout ──────────────────────────────────────────────────
   Future<void> _handleMainButton() async {
     final wo = _data?['workOrder'] ?? {};
-    final bool hasCheckin = wo['checkin'] != null;
-    final bool hasCheckout = wo['checkout'] != null;
-    if (hasCheckout) return;
+    if (wo['checkout'] != null) return;
     setState(() => _isSubmitting = true);
     try {
-      if (!hasCheckin) {
+      if (wo['checkin'] == null) {
         await _apiService.post('data/checkin', {
           'work_order_id': widget.workOrderId,
         });
@@ -290,11 +292,9 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
 
   // ─── WhatsApp ────────────────────────────────────────────────────────────
   Future<void> _openWhatsApp(String phone) async {
-    String normalized = phone.replaceAll(RegExp(r'\D'), '');
-    if (normalized.startsWith('0')) {
-      normalized = '62${normalized.substring(1)}';
-    }
-    final url = Uri.parse('https://wa.me/$normalized');
+    String n = phone.replaceAll(RegExp(r'\D'), '');
+    if (n.startsWith('0')) n = '62${n.substring(1)}';
+    final url = Uri.parse('https://wa.me/$n');
     if (await canLaunchUrl(url)) {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
@@ -314,12 +314,24 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  void _showPhotoViewer(List<String> urls, int initialIndex) {
+  void _showPhotoViewer(List<String> urls, int idx) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            _PhotoViewerScreen(urls: urls, initialIndex: initialIndex),
+        builder: (_) => _PhotoViewerScreen(
+          urls: urls,
+          initialIndex: idx,
+          token: widget.token,
+        ),
+      ),
+    );
+  }
+
+  void _showBase64Viewer(String base64Data) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _Base64ViewerScreen(base64Data: base64Data),
       ),
     );
   }
@@ -415,50 +427,32 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     final String address = customerAddress['address'] ?? '-';
     final bool hasCheckin = wo['checkin'] != null;
     final bool hasCheckout = wo['checkout'] != null;
-    final String checkInTime = wo['checkin'] != null
-        ? _formatTime(wo['checkin'])
-        : '-';
-    final String checkOutTime = wo['checkout'] != null
-        ? _formatTime(wo['checkout'])
-        : '-';
+    final String checkInTime = hasCheckin ? _formatTime(wo['checkin']) : '-';
+    final String checkOutTime = hasCheckout ? _formatTime(wo['checkout']) : '-';
 
-    // ✅ Survey photos: ambil semua quotationImage yang punya s3_path
-    // Filter LONGGAR: hanya skip yang s3_path null/kosong
-    // (pod_size == 0 bisa tetap ada, biarkan Image.network yang handle error)
-    final List quotationImages = (_data?['quotationImage'] as List? ?? [])
-        .where(
-          (img) =>
-              img['s3_path'] != null && (img['s3_path'] as String).isNotEmpty,
-        )
-        .toList();
-
-    final List<String> surveyPhotoUrls = quotationImages
+    // Survey Photos dari quotationImage
+    final List rawImgs = _data?['quotationImage'] as List? ?? [];
+    final List<String> surveyUrls = rawImgs
+        .where((img) => img is Map && _isValidImage(img as Map))
         .map<String>((img) => _buildPhotoUrl(img['s3_path'] as String))
-        .where((url) => url.isNotEmpty)
+        .where((u) => u.isNotEmpty)
         .toList();
 
-    // ✅ podBefore / podAfter — struktur dari API adalah Map, bukan String
-    // Contoh: {type: before, s3_path: "pod/xxx.jpg", url: "https://..."}
-    // Debug: print semua key yang ada
-    final dynamic podBeforeRaw = _data?['podBefore'];
-    final dynamic podAfterRaw = _data?['podAfter'];
-
-    debugPrint(
-      'podBefore type: ${podBeforeRaw.runtimeType} value: $podBeforeRaw',
-    );
-    debugPrint('podAfter type: ${podAfterRaw.runtimeType} value: $podAfterRaw');
-
-    final String podBeforeUrl = _extractPhotoUrl(podBeforeRaw);
-    final String podAfterUrl = _extractPhotoUrl(podAfterRaw);
+    // Photo Before / After dari workOrderPod
+    final bool hasBefore = _hasPod('before');
+    final bool hasAfter = _hasPod('after');
+    final String beforeUrl = _findPodUrl('before');
+    final String? beforeB64 = _findPodBase64('before');
+    final String afterUrl = _findPodUrl('after');
+    final String? afterB64 = _findPodBase64('after');
 
     return SingleChildScrollView(
       child: Column(
         children: [
-          // ── Map ──────────────────────────────────────────────────────────
           _buildMapSection(),
           const SizedBox(height: 12),
 
-          // ── Lokasi ───────────────────────────────────────────────────────
+          // Lokasi
           _buildCard(
             child: Row(
               children: [
@@ -492,7 +486,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Clock In / Out ───────────────────────────────────────────────
+          // Clock
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
@@ -513,7 +507,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Customer Card ────────────────────────────────────────────────
+          // Customer
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -648,7 +642,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Priority ─────────────────────────────────────────────────────
+          // Priority
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -668,7 +662,6 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 16),
 
-          // ── Aktivitas Tugas header ────────────────────────────────────────
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16),
             child: Align(
@@ -685,7 +678,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Work Order List ──────────────────────────────────────────────
+          // WO List
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -704,11 +697,13 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Photo Before ─────────────────────────────────────────────────
+          // Photo Before
           _buildPhotoCard(
             title: 'Photo Before',
             icon: Icons.camera_alt_outlined,
-            existingUrl: podBeforeUrl,
+            hasPod: hasBefore,
+            podUrl: beforeUrl,
+            podBase64: beforeB64,
             newFile: _newPhotoBefore,
             noteController: _noteBeforeController,
             isUploading: _isUploadingBefore,
@@ -721,11 +716,13 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Photo After ──────────────────────────────────────────────────
+          // Photo After
           _buildPhotoCard(
             title: 'Photo After',
             icon: Icons.add_photo_alternate_outlined,
-            existingUrl: podAfterUrl,
+            hasPod: hasAfter,
+            podUrl: afterUrl,
+            podBase64: afterB64,
             newFile: _newPhotoAfter,
             noteController: _noteAfterController,
             isUploading: _isUploadingAfter,
@@ -738,7 +735,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Survey Photo (quotationImage) ────────────────────────────────
+          // Survey Photo
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -750,47 +747,24 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                       'Survey Photo',
                     ),
                     const Spacer(),
-                    if (surveyPhotoUrls.isNotEmpty)
+                    if (surveyUrls.isNotEmpty)
                       GestureDetector(
-                        onTap: () => _showPhotoViewer(surveyPhotoUrls, 0),
+                        onTap: () => _showPhotoViewer(surveyUrls, 0),
                         child: _buildTextButton('Lihat Semua'),
                       ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                if (surveyPhotoUrls.isEmpty)
-                  // ✅ Tampilkan placeholder + debug info jika kosong
-                  Column(
-                    children: [
-                      _buildPhotoPlaceholder('Belum ada foto survey'),
-                      const SizedBox(height: 8),
-                      // DEBUG: tampilkan raw data untuk cek
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF3E0),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          'Debug: quotationImage count = ${(_data?['quotationImage'] as List? ?? []).length}\n'
-                          'Cek Debug Console untuk URL foto.',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.orange,
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
+                if (surveyUrls.isEmpty)
+                  _buildPhotoPlaceholder('Belum ada foto survey')
                 else
                   SizedBox(
                     height: 120,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
-                      itemCount: surveyPhotoUrls.length,
+                      itemCount: surveyUrls.length,
                       itemBuilder: (_, i) => GestureDetector(
-                        onTap: () => _showPhotoViewer(surveyPhotoUrls, i),
+                        onTap: () => _showPhotoViewer(surveyUrls, i),
                         child: Container(
                           width: 120,
                           margin: const EdgeInsets.only(right: 8),
@@ -800,40 +774,20 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                           ),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(10),
-                            child: Image.network(
-                              surveyPhotoUrls[i],
+                            child: _AuthImage(
+                              url: surveyUrls[i],
+                              token: widget.token,
                               fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
-                                color: const Color(0xFFF5F7FA),
-                                child: const Center(
-                                  child: Icon(
-                                    Icons.broken_image,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                              ),
-                              loadingBuilder: (_, child, prog) => prog == null
-                                  ? child
-                                  : const Center(
-                                      child: SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Color(0xFF7BCEF5),
-                                        ),
-                                      ),
-                                    ),
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                if (surveyPhotoUrls.isNotEmpty) ...[
+                if (surveyUrls.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
-                    '${surveyPhotoUrls.length} foto survey',
+                    '${surveyUrls.length} foto survey',
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                 ],
@@ -842,7 +796,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Catatan Teknisi ──────────────────────────────────────────────
+          // Catatan Teknisi
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -908,7 +862,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Comment ──────────────────────────────────────────────────────
+          // Comment
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -969,7 +923,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // ── Checklist ────────────────────────────────────────────────────
+          // Checklist
           _buildCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -996,7 +950,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 24),
 
-          // ── Main Button ──────────────────────────────────────────────────
+          // Main Button
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: SizedBox(
@@ -1062,7 +1016,9 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
   Widget _buildPhotoCard({
     required String title,
     required IconData icon,
-    required String existingUrl,
+    required bool hasPod,
+    required String podUrl,
+    required String? podBase64,
     required File? newFile,
     required TextEditingController noteController,
     required bool isUploading,
@@ -1070,8 +1026,6 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     required Future<void> Function() onUpload,
     required VoidCallback onCancel,
   }) {
-    final bool hasExisting = existingUrl.isNotEmpty;
-
     return _buildCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1088,52 +1042,55 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                 ),
               ),
               const Spacer(),
-              if (hasExisting && newFile == null)
+              if (hasPod && newFile == null)
                 GestureDetector(
-                  onTap: () => _showPhotoViewer([existingUrl], 0),
+                  onTap: () {
+                    if (podUrl.isNotEmpty) {
+                      _showPhotoViewer([podUrl], 0);
+                    } else if (podBase64 != null) {
+                      _showBase64Viewer(podBase64);
+                    }
+                  },
                   child: _buildTextButton('Detail'),
                 ),
             ],
           ),
           const SizedBox(height: 12),
 
-          // ── Existing photo ───────────────────────────────────────────────
-          if (hasExisting && newFile == null)
+          // Existing photo
+          if (hasPod && newFile == null)
             GestureDetector(
-              onTap: () => _showPhotoViewer([existingUrl], 0),
+              onTap: () {
+                if (podUrl.isNotEmpty) {
+                  _showPhotoViewer([podUrl], 0);
+                } else if (podBase64 != null) {
+                  _showBase64Viewer(podBase64);
+                }
+              },
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: Image.network(
-                  existingUrl,
-                  height: 160,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    // ✅ Tampilkan URL yang gagal untuk debug
-                    debugPrint('❌ Gagal load foto: $existingUrl — $error');
-                    return _buildPhotoErrorWidget(existingUrl);
-                  },
-                  loadingBuilder: (_, child, prog) => prog == null
-                      ? child
-                      : SizedBox(
-                          height: 160,
-                          child: Center(
-                            child: CircularProgressIndicator(
-                              value: prog.expectedTotalBytes != null
-                                  ? prog.cumulativeBytesLoaded /
-                                        prog.expectedTotalBytes!
-                                  : null,
-                              color: const Color(0xFF7BCEF5),
-                            ),
-                          ),
-                        ),
-                ),
+                child: podUrl.isNotEmpty
+                    ? _AuthImage(
+                        url: podUrl,
+                        token: widget.token,
+                        height: 160,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        base64Fallback: podBase64,
+                      )
+                    : podBase64 != null
+                    ? _Base64Image(
+                        base64Data: podBase64,
+                        height: 160,
+                        width: double.infinity,
+                      )
+                    : _buildPhotoPlaceholder('Gagal memuat foto'),
               ),
             )
-          else if (!hasExisting && newFile == null)
+          else if (!hasPod && newFile == null)
             _buildPhotoPlaceholder('Belum ada foto'),
 
-          // ── New file preview ─────────────────────────────────────────────
+          // New file preview
           if (newFile != null) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
@@ -1216,8 +1173,6 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ],
 
           const SizedBox(height: 10),
-
-          // ── Pick button ──────────────────────────────────────────────────
           if (newFile == null)
             SizedBox(
               width: double.infinity,
@@ -1229,7 +1184,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                   color: Color(0xFF7BCEF5),
                 ),
                 label: Text(
-                  hasExisting ? 'Ganti Foto' : 'Pilih Foto',
+                  hasPod ? 'Ganti Foto' : 'Pilih Foto',
                   style: const TextStyle(
                     color: Color(0xFF7BCEF5),
                     fontSize: 13,
@@ -1249,8 +1204,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
+  // ─── Widget Helpers ───────────────────────────────────────────────────────
   Widget _buildMapSection() {
     return Container(
       height: 180,
@@ -1494,42 +1448,6 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  // ✅ Error widget yang tampilkan URL untuk membantu debug
-  Widget _buildPhotoErrorWidget(String url) {
-    return Container(
-      height: 160,
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF3E0),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.orange.shade200),
-      ),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.broken_image, color: Colors.orange, size: 32),
-          const SizedBox(height: 6),
-          const Text(
-            'Foto gagal dimuat',
-            style: TextStyle(
-              color: Colors.orange,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            url,
-            style: const TextStyle(color: Colors.grey, fontSize: 9),
-            textAlign: TextAlign.center,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildChecklistItem(
     String text,
     bool value,
@@ -1566,12 +1484,167 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
   }
 }
 
-// ─── Full Screen Photo Viewer ─────────────────────────────────────────────────
+// ─── _AuthImage ───────────────────────────────────────────────────────────────
+/// Image dengan Authorization Bearer token. Fallback ke base64 jika URL gagal.
+class _AuthImage extends StatelessWidget {
+  final String url;
+  final String token;
+  final double? height;
+  final double? width;
+  final BoxFit fit;
+  final String? base64Fallback;
+
+  const _AuthImage({
+    required this.url,
+    required this.token,
+    this.height,
+    this.width,
+    this.fit = BoxFit.cover,
+    this.base64Fallback,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (url.isEmpty) {
+      if (base64Fallback != null && base64Fallback!.isNotEmpty) {
+        return _Base64Image(
+          base64Data: base64Fallback!,
+          height: height,
+          width: width,
+          fit: fit,
+        );
+      }
+      return SizedBox(height: height, width: width);
+    }
+
+    return Image(
+      image: NetworkImage(url, headers: {'Authorization': 'Bearer $token'}),
+      height: height,
+      width: width,
+      fit: fit,
+      loadingBuilder: (_, child, prog) => prog == null
+          ? child
+          : SizedBox(
+              height: height,
+              child: Center(
+                child: CircularProgressIndicator(
+                  value: prog.expectedTotalBytes != null
+                      ? prog.cumulativeBytesLoaded / prog.expectedTotalBytes!
+                      : null,
+                  color: const Color(0xFF7BCEF5),
+                  strokeWidth: 2,
+                ),
+              ),
+            ),
+      errorBuilder: (_, err, __) {
+        debugPrint('❌ _AuthImage error: $url — $err');
+        if (base64Fallback != null && base64Fallback!.isNotEmpty) {
+          return _Base64Image(
+            base64Data: base64Fallback!,
+            height: height,
+            width: width,
+            fit: fit,
+          );
+        }
+        return SizedBox(
+          height: height,
+          width: width,
+          child: Container(
+            color: const Color(0xFFF5F7FA),
+            child: const Center(
+              child: Icon(Icons.broken_image, color: Colors.grey, size: 32),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─── _Base64Image ─────────────────────────────────────────────────────────────
+/// Render gambar langsung dari base64 string (pod_data dari API).
+class _Base64Image extends StatelessWidget {
+  final String base64Data;
+  final double? height;
+  final double? width;
+  final BoxFit fit;
+
+  const _Base64Image({
+    required this.base64Data,
+    this.height,
+    this.width,
+    this.fit = BoxFit.cover,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      final Uint8List bytes = base64Decode(base64Data);
+      return Image.memory(
+        bytes,
+        height: height,
+        width: width,
+        fit: fit,
+        errorBuilder: (_, __, ___) => _broken(),
+      );
+    } catch (e) {
+      debugPrint('❌ Base64 decode error: $e');
+      return _broken();
+    }
+  }
+
+  Widget _broken() => SizedBox(
+    height: height,
+    width: width,
+    child: Container(
+      color: const Color(0xFFF5F7FA),
+      child: const Center(
+        child: Icon(Icons.broken_image, color: Colors.grey, size: 32),
+      ),
+    ),
+  );
+}
+
+// ─── _Base64ViewerScreen ──────────────────────────────────────────────────────
+class _Base64ViewerScreen extends StatelessWidget {
+  final String base64Data;
+  const _Base64ViewerScreen({required this.base64Data});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: const Text(
+          'Foto',
+          style: TextStyle(color: Colors.white, fontSize: 14),
+        ),
+        centerTitle: true,
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 4.0,
+          child: _Base64Image(base64Data: base64Data, fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── _PhotoViewerScreen ───────────────────────────────────────────────────────
 class _PhotoViewerScreen extends StatefulWidget {
   final List<String> urls;
   final int initialIndex;
+  final String token;
 
-  const _PhotoViewerScreen({required this.urls, required this.initialIndex});
+  const _PhotoViewerScreen({
+    required this.urls,
+    required this.initialIndex,
+    required this.token,
+  });
 
   @override
   State<_PhotoViewerScreen> createState() => _PhotoViewerScreenState();
@@ -1617,8 +1690,11 @@ class _PhotoViewerScreenState extends State<_PhotoViewerScreen> {
               minScale: 0.5,
               maxScale: 4.0,
               child: Center(
-                child: Image.network(
-                  widget.urls[i],
+                child: Image(
+                  image: NetworkImage(
+                    widget.urls[i],
+                    headers: {'Authorization': 'Bearer ${widget.token}'},
+                  ),
                   fit: BoxFit.contain,
                   errorBuilder: (_, __, ___) => const Center(
                     child: Icon(
