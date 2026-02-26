@@ -39,12 +39,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           return Stack(
             children: [
               Container(
-                height: 280,
+                height: 350,
                 decoration: const BoxDecoration(
                   color: Color(0xFF7BCEF5),
                   borderRadius: BorderRadius.only(
-                    bottomLeft: Radius.circular(40),
-                    bottomRight: Radius.circular(40),
+                    bottomLeft: Radius.circular(50),
+                    bottomRight: Radius.circular(50),
                   ),
                 ),
               ),

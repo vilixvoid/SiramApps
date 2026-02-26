@@ -20,7 +20,7 @@ class HeaderWidget extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    "Good Morning",
+                    "Hello",
                     style: TextStyle(color: Colors.white, fontSize: 16),
                   ),
                   const SizedBox(height: 4),

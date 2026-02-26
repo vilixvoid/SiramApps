@@ -6,6 +6,7 @@ import 'package:siram/view/widgets/CalendarWidget.dart';
 import 'package:siram/view/widgets/HeaderWidget.dart';
 import 'package:siram/view/widgets/VisitCardWidget.dart';
 import 'package:siram/viewmodel/HomeViewModel.dart';
+import 'package:siram/viewmodel/LoginViewModel.dart'; // ✅ Import LoginViewModel
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -32,7 +33,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ✅ Home content dipisah ke widget sendiri
 class _HomePage extends StatefulWidget {
   const _HomePage();
 
@@ -51,15 +51,20 @@ class _HomePageState extends State<_HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Ambil token dari LoginViewModel → currentUser
+    // Jika nama field di UserModel berbeda, ganti .token → .accessToken / .authToken
+    final String token =
+        context.read<LoginViewModel>().currentUser?.token ?? '';
+
     return Stack(
       children: [
         Container(
-          height: 300,
+          height: 350,
           decoration: const BoxDecoration(
             color: Color(0xFF7BCEF5),
             borderRadius: BorderRadius.only(
-              bottomLeft: Radius.circular(40),
-              bottomRight: Radius.circular(40),
+              bottomLeft: Radius.circular(50),
+              bottomRight: Radius.circular(50),
             ),
           ),
         ),
@@ -74,7 +79,10 @@ class _HomePageState extends State<_HomePage> {
                   padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                   child: Text(
                     "Daftar Kunjungan",
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 Consumer<HomeViewModel>(
@@ -159,6 +167,8 @@ class _HomePageState extends State<_HomePage> {
                               woDate: wo.woDate,
                               woName: wo.woName,
                               showArrow: true,
+                              workOrderId: wo.workOrderId, // ✅ dari WorkOrderModel
+                              token: token,                // ✅ dari LoginViewModel
                             ),
                           )
                           .toList(),
