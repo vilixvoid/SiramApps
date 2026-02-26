@@ -42,9 +42,16 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
   bool _checkTandaTangan = false;
   bool _checkPenutupanTiket = false;
 
+  // Carousel page controllers
+  final PageController _beforePageCtrl = PageController();
+  final PageController _afterPageCtrl = PageController();
+  final PageController _surveyPageCtrl = PageController();
+  int _beforeCurrentPage = 0;
+  int _afterCurrentPage = 0;
+  int _surveyCurrentPage = 0;
+
   late final ApiService _apiService;
 
-  // URL base untuk storage — sudah confirmed bisa diakses dengan Bearer token
   static const String _s3BaseUrl = 'https://siram.watercare.co.id/storage/';
 
   @override
@@ -52,6 +59,18 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     super.initState();
     _apiService = ApiService();
     _fetchDetail();
+  }
+
+  @override
+  void dispose() {
+    _notesController.dispose();
+    _commentController.dispose();
+    _noteBeforeController.dispose();
+    _noteAfterController.dispose();
+    _beforePageCtrl.dispose();
+    _afterPageCtrl.dispose();
+    _surveyPageCtrl.dispose();
+    super.dispose();
   }
 
   // ─── Fetch ───────────────────────────────────────────────────────────────
@@ -71,7 +90,6 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
         _notesController.text = (data['workOrder']?['notes_technician'] ?? '')
             .toString();
       });
-      _debugPhotos(data);
     } catch (e) {
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
@@ -80,24 +98,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  void _debugPhotos(Map<String, dynamic> data) {
-    debugPrint('════ DEBUG FOTO WO #${widget.workOrderId} ════');
-    final pods = data['workOrderPod'] as List? ?? [];
-    debugPrint('workOrderPod count: ${pods.length}');
-    for (final p in pods) {
-      if (p is! Map) continue;
-      debugPrint(
-        '  pod id=${p['work_order_pod_id']} type=${p['type']} '
-        's3_url="${p['s3_url']}" s3_path="${p['s3_path']}" '
-        'pod_data_len=${(p['pod_data']?.toString().length ?? 0)}',
-      );
-    }
-    final imgs = data['quotationImage'] as List? ?? [];
-    debugPrint('quotationImage count: ${imgs.length}');
-    debugPrint('════════════════════════════════════════');
-  }
-
-  // ─── URL / Pod helpers ────────────────────────────────────────────────────
+  // ─── URL helpers ──────────────────────────────────────────────────────────
   String _buildPhotoUrl(String? s3Path) {
     if (s3Path == null || s3Path.trim().isEmpty) return '';
     final t = s3Path.trim();
@@ -106,50 +107,32 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     return '$base${t.startsWith('/') ? t.substring(1) : t}';
   }
 
-  /// Cari URL (s3_url atau s3_path) dari workOrderPod berdasarkan type.
-  /// Return '' jika tidak ada URL tapi ada pod_data — pakai _findPodBase64.
-  String _findPodUrl(String type) {
+  /// Returns list of all pods matching a type (before / after) — supports multiple photos
+  List<Map<String, dynamic>> _getPodsOfType(String type) {
     final List pods = _data?['workOrderPod'] as List? ?? [];
     final String t = type.toLowerCase().trim();
-    for (final pod in pods) {
-      if (pod is! Map) continue;
-      if ((pod['type']?.toString().toLowerCase().trim() ?? '') != t) continue;
-      for (final key in ['s3_url', 'url', 'file_url', 'full_url', 's3_path']) {
-        final val = pod[key]?.toString().trim() ?? '';
-        if (val.isNotEmpty) {
-          debugPrint('pod "$type" URL via "$key": $val');
-          return _buildPhotoUrl(val);
-        }
-      }
-      // Pod ada tapi semua URL kosong → ada pod_data, return '' agar pakai base64
-      return '';
+    return pods
+        .whereType<Map>()
+        .where((p) => (p['type']?.toString().toLowerCase().trim() ?? '') == t)
+        .map((p) => Map<String, dynamic>.from(p))
+        .toList();
+  }
+
+  String _podUrl(Map pod) {
+    for (final key in ['s3_url', 'url', 'file_url', 'full_url', 's3_path']) {
+      final val = pod[key]?.toString().trim() ?? '';
+      if (val.isNotEmpty) return _buildPhotoUrl(val);
     }
     return '';
   }
 
-  /// Ambil pod_data (base64 JPEG) — primary source ketika s3_url kosong.
-  String? _findPodBase64(String type) {
-    final List pods = _data?['workOrderPod'] as List? ?? [];
-    final String t = type.toLowerCase().trim();
-    for (final pod in pods) {
-      if (pod is! Map) continue;
-      if ((pod['type']?.toString().toLowerCase().trim() ?? '') != t) continue;
-      final data = pod['pod_data']?.toString().trim() ?? '';
-      if (data.isNotEmpty) return data;
-    }
-    return null;
+  String? _podBase64(Map pod) {
+    final d = pod['pod_data']?.toString().trim() ?? '';
+    return d.isNotEmpty ? d : null;
   }
 
-  /// Apakah ada pod (before/after) di workOrderPod?
-  bool _hasPod(String type) {
-    final List pods = _data?['workOrderPod'] as List? ?? [];
-    final String t = type.toLowerCase().trim();
-    for (final pod in pods) {
-      if (pod is! Map) continue;
-      if ((pod['type']?.toString().toLowerCase().trim() ?? '') == t)
-        return true;
-    }
-    return false;
+  String _podComment(Map pod) {
+    return pod['notes']?.toString() ?? pod['comment']?.toString() ?? '';
   }
 
   bool _isValidImage(Map img) {
@@ -161,7 +144,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     return true;
   }
 
-  // ─── Upload Before ───────────────────────────────────────────────────────
+  // ─── Upload Before ────────────────────────────────────────────────────────
   Future<void> _pickPhotoBefore() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
@@ -195,6 +178,13 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           _noteBeforeController.clear();
         });
         await _fetchDetail();
+        // Jump to last page after reload
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final pods = _getPodsOfType('before');
+          if (pods.isNotEmpty && _beforePageCtrl.hasClients) {
+            _beforePageCtrl.jumpToPage(pods.length - 1);
+          }
+        });
       } else {
         _showSnackBar('Gagal upload (${response.statusCode})');
       }
@@ -205,7 +195,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  // ─── Upload After ────────────────────────────────────────────────────────
+  // ─── Upload After ─────────────────────────────────────────────────────────
   Future<void> _pickPhotoAfter() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
@@ -239,6 +229,12 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           _noteAfterController.clear();
         });
         await _fetchDetail();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final pods = _getPodsOfType('after');
+          if (pods.isNotEmpty && _afterPageCtrl.hasClients) {
+            _afterPageCtrl.jumpToPage(pods.length - 1);
+          }
+        });
       } else {
         _showSnackBar('Gagal upload (${response.statusCode})');
       }
@@ -249,7 +245,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  // ─── Save Notes ──────────────────────────────────────────────────────────
+  // ─── Save Notes ───────────────────────────────────────────────────────────
   Future<void> _saveNotes() async {
     setState(() => _isSavingNotes = true);
     try {
@@ -265,7 +261,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  // ─── Checkin / Checkout ──────────────────────────────────────────────────
+  // ─── Checkin / Checkout ───────────────────────────────────────────────────
   Future<void> _handleMainButton() async {
     final wo = _data?['workOrder'] ?? {};
     if (wo['checkout'] != null) return;
@@ -290,7 +286,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     }
   }
 
-  // ─── WhatsApp ────────────────────────────────────────────────────────────
+  // ─── WhatsApp ─────────────────────────────────────────────────────────────
   Future<void> _openWhatsApp(String phone) async {
     String n = phone.replaceAll(RegExp(r'\D'), '');
     if (n.startsWith('0')) n = '62${n.substring(1)}';
@@ -314,15 +310,12 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  void _showPhotoViewer(List<String> urls, int idx) {
+  void _showPhotoViewer(List<String> urls, int idx, String token) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => _PhotoViewerScreen(
-          urls: urls,
-          initialIndex: idx,
-          token: widget.token,
-        ),
+        builder: (_) =>
+            _PhotoViewerScreen(urls: urls, initialIndex: idx, token: token),
       ),
     );
   }
@@ -336,16 +329,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  @override
-  void dispose() {
-    _notesController.dispose();
-    _commentController.dispose();
-    _noteBeforeController.dispose();
-    _noteAfterController.dispose();
-    super.dispose();
-  }
-
-  // ─── Build ───────────────────────────────────────────────────────────────
+  // ─── Build ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -430,21 +414,16 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     final String checkInTime = hasCheckin ? _formatTime(wo['checkin']) : '-';
     final String checkOutTime = hasCheckout ? _formatTime(wo['checkout']) : '-';
 
-    // Survey Photos dari quotationImage
+    // Survey Photos
     final List rawImgs = _data?['quotationImage'] as List? ?? [];
-    final List<String> surveyUrls = rawImgs
-        .where((img) => img is Map && _isValidImage(img as Map))
-        .map<String>((img) => _buildPhotoUrl(img['s3_path'] as String))
-        .where((u) => u.isNotEmpty)
+    final List<Map> validSurveyImgs = rawImgs
+        .whereType<Map>()
+        .where((img) => _isValidImage(img))
         .toList();
 
-    // Photo Before / After dari workOrderPod
-    final bool hasBefore = _hasPod('before');
-    final bool hasAfter = _hasPod('after');
-    final String beforeUrl = _findPodUrl('before');
-    final String? beforeB64 = _findPodBase64('before');
-    final String afterUrl = _findPodUrl('after');
-    final String? afterB64 = _findPodBase64('after');
+    // Before / After pods (multiple)
+    final List<Map<String, dynamic>> beforePods = _getPodsOfType('before');
+    final List<Map<String, dynamic>> afterPods = _getPodsOfType('after');
 
     return SingleChildScrollView(
       child: Column(
@@ -697,16 +676,17 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // Photo Before
-          _buildPhotoCard(
+          // ── Photo Before (multi-slide) ──
+          _buildMultiPhotoCard(
             title: 'Photo Before',
             icon: Icons.camera_alt_outlined,
-            hasPod: hasBefore,
-            podUrl: beforeUrl,
-            podBase64: beforeB64,
+            pods: beforePods,
             newFile: _newPhotoBefore,
             noteController: _noteBeforeController,
             isUploading: _isUploadingBefore,
+            pageController: _beforePageCtrl,
+            currentPage: _beforeCurrentPage,
+            onPageChanged: (i) => setState(() => _beforeCurrentPage = i),
             onPick: _pickPhotoBefore,
             onUpload: _uploadPhotoBefore,
             onCancel: () => setState(() {
@@ -716,16 +696,17 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // Photo After
-          _buildPhotoCard(
+          // ── Photo After (multi-slide) ──
+          _buildMultiPhotoCard(
             title: 'Photo After',
             icon: Icons.add_photo_alternate_outlined,
-            hasPod: hasAfter,
-            podUrl: afterUrl,
-            podBase64: afterB64,
+            pods: afterPods,
             newFile: _newPhotoAfter,
             noteController: _noteAfterController,
             isUploading: _isUploadingAfter,
+            pageController: _afterPageCtrl,
+            currentPage: _afterCurrentPage,
+            onPageChanged: (i) => setState(() => _afterCurrentPage = i),
             onPick: _pickPhotoAfter,
             onUpload: _uploadPhotoAfter,
             onCancel: () => setState(() {
@@ -735,65 +716,8 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ),
           const SizedBox(height: 8),
 
-          // Survey Photo
-          _buildCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    _buildSectionHeader(
-                      Icons.photo_library_outlined,
-                      'Survey Photo',
-                    ),
-                    const Spacer(),
-                    if (surveyUrls.isNotEmpty)
-                      GestureDetector(
-                        onTap: () => _showPhotoViewer(surveyUrls, 0),
-                        child: _buildTextButton('Lihat Semua'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                if (surveyUrls.isEmpty)
-                  _buildPhotoPlaceholder('Belum ada foto survey')
-                else
-                  SizedBox(
-                    height: 120,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: surveyUrls.length,
-                      itemBuilder: (_, i) => GestureDetector(
-                        onTap: () => _showPhotoViewer(surveyUrls, i),
-                        child: Container(
-                          width: 120,
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: const Color(0xFFE0E0E0)),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: _AuthImage(
-                              url: surveyUrls[i],
-                              token: widget.token,
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (surveyUrls.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    '${surveyUrls.length} foto survey',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              ],
-            ),
-          ),
+          // ── Survey Photo (multi-slide) ──
+          _buildSurveyPhotoCard(validSurveyImgs),
           const SizedBox(height: 8),
 
           // Catatan Teknisi
@@ -1012,16 +936,17 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  // ─── Photo Card ───────────────────────────────────────────────────────────
-  Widget _buildPhotoCard({
+  // ─── Multi Photo Card (Before / After) ───────────────────────────────────
+  Widget _buildMultiPhotoCard({
     required String title,
     required IconData icon,
-    required bool hasPod,
-    required String podUrl,
-    required String? podBase64,
+    required List<Map<String, dynamic>> pods,
     required File? newFile,
     required TextEditingController noteController,
     required bool isUploading,
+    required PageController pageController,
+    required int currentPage,
+    required ValueChanged<int> onPageChanged,
     required VoidCallback onPick,
     required Future<void> Function() onUpload,
     required VoidCallback onCancel,
@@ -1030,6 +955,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header
           Row(
             children: [
               Icon(icon, color: const Color(0xFF7BCEF5), size: 22),
@@ -1042,53 +968,31 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                 ),
               ),
               const Spacer(),
-              if (hasPod && newFile == null)
-                GestureDetector(
-                  onTap: () {
-                    if (podUrl.isNotEmpty) {
-                      _showPhotoViewer([podUrl], 0);
-                    } else if (podBase64 != null) {
-                      _showBase64Viewer(podBase64);
-                    }
-                  },
-                  child: _buildTextButton('Detail'),
+              if (pods.isNotEmpty)
+                Text(
+                  '${pods.length} foto',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
             ],
           ),
           const SizedBox(height: 12),
 
-          // Existing photo
-          if (hasPod && newFile == null)
-            GestureDetector(
-              onTap: () {
-                if (podUrl.isNotEmpty) {
-                  _showPhotoViewer([podUrl], 0);
-                } else if (podBase64 != null) {
-                  _showBase64Viewer(podBase64);
-                }
-              },
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: podUrl.isNotEmpty
-                    ? _AuthImage(
-                        url: podUrl,
-                        token: widget.token,
-                        height: 160,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        base64Fallback: podBase64,
-                      )
-                    : podBase64 != null
-                    ? _Base64Image(
-                        base64Data: podBase64,
-                        height: 160,
-                        width: double.infinity,
-                      )
-                    : _buildPhotoPlaceholder('Gagal memuat foto'),
-              ),
-            )
-          else if (!hasPod && newFile == null)
+          // Existing photos carousel
+          if (pods.isNotEmpty && newFile == null) ...[
+            _buildPhotoCarousel(
+              pods: pods,
+              pageController: pageController,
+              currentPage: currentPage,
+              onPageChanged: onPageChanged,
+            ),
+            const SizedBox(height: 8),
+            // Dot indicator
+            if (pods.length > 1) _buildDotIndicator(pods.length, currentPage),
+            // Comment for current photo
+            _buildPhotoCommentSection(pods, currentPage),
+          ] else if (pods.isEmpty && newFile == null) ...[
             _buildPhotoPlaceholder('Belum ada foto'),
+          ],
 
           // New file preview
           if (newFile != null) ...[
@@ -1096,7 +1000,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
               borderRadius: BorderRadius.circular(10),
               child: Image.file(
                 newFile,
-                height: 160,
+                height: 200,
                 width: double.infinity,
                 fit: BoxFit.cover,
               ),
@@ -1106,7 +1010,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
               controller: noteController,
               maxLines: 2,
               decoration: InputDecoration(
-                hintText: 'Tambahkan keterangan foto (opsional)...',
+                hintText: 'Tambahkan keterangan / comment foto (opsional)...',
                 hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
                 filled: true,
                 fillColor: const Color(0xFFF5F7FA),
@@ -1173,6 +1077,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
           ],
 
           const SizedBox(height: 10),
+          // Always show "Tambah Foto" button
           if (newFile == null)
             SizedBox(
               width: double.infinity,
@@ -1184,7 +1089,7 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                   color: Color(0xFF7BCEF5),
                 ),
                 label: Text(
-                  hasPod ? 'Ganti Foto' : 'Pilih Foto',
+                  pods.isNotEmpty ? 'Tambah Foto' : 'Pilih Foto',
                   style: const TextStyle(
                     color: Color(0xFF7BCEF5),
                     fontSize: 13,
@@ -1199,6 +1104,364 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotoCarousel({
+    required List<Map<String, dynamic>> pods,
+    required PageController pageController,
+    required int currentPage,
+    required ValueChanged<int> onPageChanged,
+  }) {
+    return SizedBox(
+      height: 220,
+      child: Stack(
+        children: [
+          PageView.builder(
+            controller: pageController,
+            itemCount: pods.length,
+            onPageChanged: onPageChanged,
+            itemBuilder: (ctx, i) {
+              final pod = pods[i];
+              final url = _podUrl(pod);
+              final b64 = _podBase64(pod);
+              return GestureDetector(
+                onTap: () {
+                  if (url.isNotEmpty) {
+                    final urls = pods
+                        .map((p) => _podUrl(p))
+                        .where((u) => u.isNotEmpty)
+                        .toList();
+                    _showPhotoViewer(urls, i, widget.token);
+                  } else if (b64 != null) {
+                    _showBase64Viewer(b64);
+                  }
+                },
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: url.isNotEmpty
+                      ? _AuthImage(
+                          url: url,
+                          token: widget.token,
+                          height: 220,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          base64Fallback: b64,
+                        )
+                      : b64 != null
+                      ? _Base64Image(
+                          base64Data: b64,
+                          height: 220,
+                          width: double.infinity,
+                        )
+                      : _buildPhotoPlaceholder('Foto tidak tersedia'),
+                ),
+              );
+            },
+          ),
+          // Counter badge
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '${currentPage + 1}/${pods.length}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          // Left arrow
+          if (pods.length > 1 && currentPage > 0)
+            Positioned(
+              left: 4,
+              top: 0,
+              bottom: 0,
+              child: Center(
+                child: GestureDetector(
+                  onTap: () => pageController.previousPage(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.black45,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Icon(
+                      Icons.chevron_left,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          // Right arrow
+          if (pods.length > 1 && currentPage < pods.length - 1)
+            Positioned(
+              right: 4,
+              top: 0,
+              bottom: 0,
+              child: Center(
+                child: GestureDetector(
+                  onTap: () => pageController.nextPage(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.black45,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Icon(
+                      Icons.chevron_right,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotoCommentSection(
+    List<Map<String, dynamic>> pods,
+    int currentPage,
+  ) {
+    if (pods.isEmpty) return const SizedBox.shrink();
+    final safeIdx = currentPage.clamp(0, pods.length - 1);
+    final comment = _podComment(pods[safeIdx]);
+    final date = pods[safeIdx]['created_at']?.toString() ?? '';
+
+    if (comment.isEmpty && date.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (date.isNotEmpty)
+            Text(
+              _formatDateTime(date),
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+          if (comment.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.comment_outlined,
+                  size: 14,
+                  color: Color(0xFF7BCEF5),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    comment,
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDotIndicator(int count, int current) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(
+        count,
+        (i) => AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          width: current == i ? 16 : 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: current == i
+                ? const Color(0xFF7BCEF5)
+                : Colors.grey.shade300,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Survey Photo Card (multi-slide) ─────────────────────────────────────
+  Widget _buildSurveyPhotoCard(List<Map> imgs) {
+    return _buildCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _buildSectionHeader(Icons.photo_library_outlined, 'Survey Photo'),
+              const Spacer(),
+              if (imgs.isNotEmpty)
+                Text(
+                  '${imgs.length} foto',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (imgs.isEmpty)
+            _buildPhotoPlaceholder('Belum ada foto survey')
+          else ...[
+            SizedBox(
+              height: 220,
+              child: Stack(
+                children: [
+                  PageView.builder(
+                    controller: _surveyPageCtrl,
+                    itemCount: imgs.length,
+                    onPageChanged: (i) =>
+                        setState(() => _surveyCurrentPage = i),
+                    itemBuilder: (_, i) {
+                      final url = _buildPhotoUrl(imgs[i]['s3_path'] as String?);
+                      return GestureDetector(
+                        onTap: () {
+                          final urls = imgs
+                              .map(
+                                (img) =>
+                                    _buildPhotoUrl(img['s3_path'] as String?),
+                              )
+                              .where((u) => u.isNotEmpty)
+                              .toList();
+                          _showPhotoViewer(urls, i, widget.token);
+                        },
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: _AuthImage(
+                            url: url,
+                            token: widget.token,
+                            height: 220,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  // Counter
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${_surveyCurrentPage + 1}/${imgs.length}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Left
+                  if (imgs.length > 1 && _surveyCurrentPage > 0)
+                    Positioned(
+                      left: 4,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: GestureDetector(
+                          onTap: () => _surveyPageCtrl.previousPage(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.black45,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Icon(
+                              Icons.chevron_left,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  // Right
+                  if (imgs.length > 1 && _surveyCurrentPage < imgs.length - 1)
+                    Positioned(
+                      right: 4,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: GestureDetector(
+                          onTap: () => _surveyPageCtrl.nextPage(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.black45,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Icon(
+                              Icons.chevron_right,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (imgs.length > 1)
+              _buildDotIndicator(imgs.length, _surveyCurrentPage),
+            // Survey photo name
+            const SizedBox(height: 6),
+            Text(
+              imgs[_surveyCurrentPage.clamp(0, imgs.length - 1)]['pod_name']
+                      ?.toString() ??
+                  '',
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ],
       ),
     );
@@ -1385,24 +1648,6 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
     );
   }
 
-  Widget _buildTextButton(String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE8F8FF),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 12,
-          color: Color(0xFF7BCEF5),
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-
   Widget _buildWoListItem(String text) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1482,10 +1727,22 @@ class _DetailWorkOrderScreenState extends State<DetailWorkOrderScreen> {
       return '-';
     }
   }
+
+  String _formatDateTime(String raw) {
+    try {
+      final dt = DateTime.parse(raw);
+      return '${dt.day.toString().padLeft(2, '0')}-'
+          '${dt.month.toString().padLeft(2, '0')}-'
+          '${dt.year}  '
+          '${dt.hour.toString().padLeft(2, '0')}:'
+          '${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return raw;
+    }
+  }
 }
 
 // ─── _AuthImage ───────────────────────────────────────────────────────────────
-/// Image dengan Authorization Bearer token. Fallback ke base64 jika URL gagal.
 class _AuthImage extends StatelessWidget {
   final String url;
   final String token;
@@ -1516,7 +1773,6 @@ class _AuthImage extends StatelessWidget {
       }
       return SizedBox(height: height, width: width);
     }
-
     return Image(
       image: NetworkImage(url, headers: {'Authorization': 'Bearer $token'}),
       height: height,
@@ -1562,7 +1818,6 @@ class _AuthImage extends StatelessWidget {
 }
 
 // ─── _Base64Image ─────────────────────────────────────────────────────────────
-/// Render gambar langsung dari base64 string (pod_data dari API).
 class _Base64Image extends StatelessWidget {
   final String base64Data;
   final double? height;
