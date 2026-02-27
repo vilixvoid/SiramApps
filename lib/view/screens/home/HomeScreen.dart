@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:siram/view/navigation/NavigationBottom.dart';
 import 'package:siram/view/screens/profile/ProfileScreen.dart';
 import 'package:siram/view/widgets/CalendarWidget.dart';
+import 'package:siram/view/widgets/FilterWidget.dart';
 import 'package:siram/view/widgets/HeaderWidget.dart';
 import 'package:siram/view/widgets/VisitCardWidget.dart';
 import 'package:siram/viewmodel/HomeViewModel.dart';
-import 'package:siram/viewmodel/LoginViewModel.dart'; // ✅ Import LoginViewModel
+import 'package:siram/viewmodel/LoginViewModel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,7 +19,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-
   final List<Widget> _pages = const [_HomePage(), ProfileScreen()];
 
   @override
@@ -49,15 +50,27 @@ class _HomePageState extends State<_HomePage> {
     });
   }
 
+  void _openFilter(BuildContext context) {
+    final vm = context.read<HomeViewModel>();
+    final fmt = DateFormat('dd-MM-yyyy');
+    final today = fmt.format(vm.selectedDate);
+
+    FilterBottomSheet.show(
+      context,
+      initialParams:
+          vm.activeFilter ?? FilterParams(fromDate: today, toDate: today),
+      onApply: (params) => vm.applyFilter(params),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // ✅ Ambil token dari LoginViewModel → currentUser
-    // Jika nama field di UserModel berbeda, ganti .token → .accessToken / .authToken
     final String token =
         context.read<LoginViewModel>().currentUser?.token ?? '';
 
     return Stack(
       children: [
+        // ── Background header biru ──────────────────────────────────────────
         Container(
           height: 350,
           decoration: const BoxDecoration(
@@ -68,6 +81,7 @@ class _HomePageState extends State<_HomePage> {
             ),
           ),
         ),
+
         SafeArea(
           child: SingleChildScrollView(
             child: Column(
@@ -75,16 +89,110 @@ class _HomePageState extends State<_HomePage> {
               children: [
                 const HeaderWidget(),
                 const CalendarWidget(),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  child: Text(
-                    "Daftar Kunjungan",
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                const SizedBox(height: 8),
+
+                // ── "Daftar Kunjungan" + tombol Filter ─────────────────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 16, 8),
+                  child: Row(
+                    children: [
+                      const Text(
+                        "Daftar Kunjungan",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const Spacer(),
+                      // ── Tombol Filter ──────────────────────────────────
+                      Consumer<HomeViewModel>(
+                        builder: (_, vm, __) => GestureDetector(
+                          onTap: () => _openFilter(context),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: vm.isFiltered
+                                  ? const Color(0xFF7BCEF5)
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: const Color(0xFF7BCEF5),
+                                width: 1.5,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFF7BCEF5,
+                                  ).withValues(alpha: 0.2),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.tune_rounded,
+                                  size: 16,
+                                  color: vm.isFiltered
+                                      ? Colors.white
+                                      : const Color(0xFF7BCEF5),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Filter',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: vm.isFiltered
+                                        ? Colors.white
+                                        : const Color(0xFF7BCEF5),
+                                  ),
+                                ),
+                                // Badge count jika filter aktif
+                                if (vm.isFiltered) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      _countActiveFilters(vm.activeFilter!),
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF7BCEF5),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+
+                // ── Active filter indicator ─────────────────────────────────
+                Consumer<HomeViewModel>(
+                  builder: (_, vm, __) {
+                    if (!vm.isFiltered) return const SizedBox.shrink();
+                    return _buildActiveFilterBanner(context, vm);
+                  },
+                ),
+
+                // ── Work Order List ─────────────────────────────────────────
                 Consumer<HomeViewModel>(
                   builder: (_, viewModel, __) {
                     if (viewModel.isLoading) {
@@ -104,6 +212,12 @@ class _HomePageState extends State<_HomePage> {
                           padding: const EdgeInsets.all(32),
                           child: Column(
                             children: [
+                              const Icon(
+                                Icons.error_outline,
+                                size: 48,
+                                color: Colors.red,
+                              ),
+                              const SizedBox(height: 8),
                               Text(
                                 viewModel.errorMessage,
                                 textAlign: TextAlign.center,
@@ -127,25 +241,47 @@ class _HomePageState extends State<_HomePage> {
                     }
 
                     if (viewModel.workOrders.isEmpty) {
-                      return const Center(
+                      return Center(
                         child: Padding(
-                          padding: EdgeInsets.symmetric(
+                          padding: const EdgeInsets.symmetric(
                             horizontal: 24,
                             vertical: 32,
                           ),
                           child: Column(
                             children: [
-                              Icon(
-                                Icons.event_busy,
-                                size: 48,
-                                color: Colors.grey,
+                              Container(
+                                padding: const EdgeInsets.all(20),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF0F4F8),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: const Icon(
+                                  Icons.event_busy,
+                                  size: 48,
+                                  color: Colors.grey,
+                                ),
                               ),
-                              SizedBox(height: 12),
+                              const SizedBox(height: 16),
                               Text(
-                                "Tidak ada kunjungan\npada tanggal ini",
+                                viewModel.isFiltered
+                                    ? "Tidak ada hasil\nyang sesuai filter"
+                                    : "Tidak ada kunjungan\npada tanggal ini",
                                 textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.grey),
+                                style: const TextStyle(color: Colors.grey),
                               ),
+                              if (viewModel.isFiltered) ...[
+                                const SizedBox(height: 12),
+                                TextButton(
+                                  onPressed: () => viewModel.clearFilter(),
+                                  child: const Text(
+                                    'Hapus Filter',
+                                    style: TextStyle(
+                                      color: Color(0xFF7BCEF5),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -167,8 +303,8 @@ class _HomePageState extends State<_HomePage> {
                               woDate: wo.woDate,
                               woName: wo.woName,
                               showArrow: true,
-                              workOrderId: wo.workOrderId, // ✅ dari WorkOrderModel
-                              token: token,                // ✅ dari LoginViewModel
+                              workOrderId: wo.workOrderId,
+                              token: token,
                             ),
                           )
                           .toList(),
@@ -182,6 +318,80 @@ class _HomePageState extends State<_HomePage> {
         ),
       ],
     );
+  }
+
+  // ── Active filter banner ──────────────────────────────────────────────────
+  Widget _buildActiveFilterBanner(BuildContext context, HomeViewModel vm) {
+    final filter = vm.activeFilter!;
+    final chips = <String>[];
+    if (filter.status != 'All') chips.add(filter.status);
+    if (filter.district != 'All') chips.add(filter.district);
+    if (filter.search.isNotEmpty) chips.add('"${filter.search}"');
+    if (filter.fromDate != filter.toDate) {
+      chips.add('${filter.fromDate} → ${filter.toDate}');
+    } else {
+      chips.add(filter.fromDate);
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8F8FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFF7BCEF5).withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.filter_list, size: 16, color: Color(0xFF7BCEF5)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: chips
+                  .map(
+                    (c) => Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF7BCEF5).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        c,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF1A6B8A),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => vm.clearFilter(),
+            child: const Icon(Icons.close, size: 16, color: Color(0xFF7BCEF5)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _countActiveFilters(FilterParams f) {
+    int count = 0;
+    if (f.status != 'All') count++;
+    if (f.district != 'All') count++;
+    if (f.search.isNotEmpty) count++;
+    if (f.fromDate != f.toDate) count++;
+    return count.toString();
   }
 
   Color _getPriorityColor(String priority) {

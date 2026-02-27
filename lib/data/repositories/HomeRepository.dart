@@ -23,4 +23,25 @@ class HomeRepository {
       throw Exception('Gagal mengambil data work order: $e');
     }
   }
+
+  // ✅ Method baru untuk filter
+  Future<List<WorkOrderModel>> getFilteredWorkOrders({
+    required String fromDate,
+    required String toDate,
+    String status = 'All',
+    String district = 'All',
+    String search = '',
+  }) async {
+    try {
+      return await _remoteDataSource.getFilteredWorkOrders(
+        fromDate: fromDate,
+        toDate: toDate,
+        status: status,
+        district: district,
+        search: search,
+      );
+    } catch (e) {
+      throw Exception('Gagal filter work order: $e');
+    }
+  }
 }
