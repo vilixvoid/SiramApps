@@ -1,16 +1,21 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
-/// Fetch image bytes dengan Authorization header.
-/// Mengatasi 403 di Android karena NetworkImage tidak support custom headers.
-class AuthImage extends StatefulWidget {
+/// Widget gambar yang:
+/// 1. Kirim Authorization Bearer token untuk URL
+/// 2. Fallback ke base64 (pod_data) jika URL kosong atau 403
+/// 3. Dipakai di PhotoCarouselCard dan PhotoViewerScreen
+class AuthImage extends StatelessWidget {
   final String url;
   final String token;
   final double? height;
   final double? width;
   final BoxFit fit;
-  final String? base64Fallback;
+
+  /// Base64 string (pod_data dari API) — dipakai ketika [url] kosong atau gagal.
+  /// Ambil dari WorkOrderPod.podData
+  final String? base64Data;
 
   const AuthImage({
     super.key,
@@ -19,134 +24,126 @@ class AuthImage extends StatefulWidget {
     this.height,
     this.width,
     this.fit = BoxFit.cover,
-    this.base64Fallback,
+    this.base64Data,
   });
 
-  // In-process memory cache: url → bytes
-  static final Map<String, Uint8List> cache = {};
-
-  static void clearCache() => cache.clear();
-
-  @override
-  State<AuthImage> createState() => _AuthImageState();
-}
-
-class _AuthImageState extends State<AuthImage> {
-  Uint8List? _bytes;
-  bool _loading = true;
-  bool _hasError = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(AuthImage old) {
-    super.didUpdateWidget(old);
-    if (old.url != widget.url || old.token != widget.token) {
-      setState(() {
-        _bytes = null;
-        _loading = true;
-        _hasError = false;
-      });
-      _load();
-    }
-  }
-
-  Future<void> _load() async {
-    if (widget.url.isEmpty) {
-      if (mounted) setState(() => _loading = false);
-      return;
-    }
-    if (AuthImage.cache.containsKey(widget.url)) {
-      if (mounted)
-        setState(() {
-          _bytes = AuthImage.cache[widget.url];
-          _loading = false;
-        });
-      return;
-    }
-    try {
-      final resp = await http
-          .get(
-            Uri.parse(widget.url),
-            headers: {'Authorization': 'Bearer ${widget.token}'},
-          )
-          .timeout(const Duration(seconds: 15));
-
-      if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
-        AuthImage.cache[widget.url] = resp.bodyBytes;
-        if (mounted)
-          setState(() {
-            _bytes = resp.bodyBytes;
-            _loading = false;
-          });
-      } else {
-        if (mounted)
-          setState(() {
-            _loading = false;
-            _hasError = true;
-          });
-      }
-    } catch (_) {
-      if (mounted)
-        setState(() {
-          _loading = false;
-          _hasError = true;
-        });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    if (widget.url.isEmpty) {
-      return SizedBox(height: widget.height, width: widget.width);
+    // Jika URL kosong → langsung render base64 (tidak perlu HTTP sama sekali)
+    if (url.isEmpty) {
+      if (base64Data != null && base64Data!.isNotEmpty) {
+        return _Base64Image(
+          data: base64Data!,
+          height: height,
+          width: width,
+          fit: fit,
+        );
+      }
+      return _broken();
     }
-    if (_loading) {
-      return SizedBox(
-        height: widget.height,
-        width: widget.width,
-        child: Container(
-          color: const Color(0xFFF5F7FA),
-          child: const Center(
-            child: CircularProgressIndicator(
-              color: Color(0xFF7BCEF5),
-              strokeWidth: 2,
-            ),
-          ),
-        ),
-      );
-    }
-    if (_hasError || _bytes == null) {
-      return _BrokenImage(height: widget.height, width: widget.width);
-    }
-    return Image.memory(
-      _bytes!,
-      height: widget.height,
-      width: widget.width,
-      fit: widget.fit,
-      errorBuilder: (_, __, ___) =>
-          _BrokenImage(height: widget.height, width: widget.width),
+
+    // Ada URL → coba load via HTTP dengan Bearer token
+    return Image(
+      image: NetworkImage(url, headers: {'Authorization': 'Bearer $token'}),
+      height: height,
+      width: width,
+      fit: fit,
+      loadingBuilder: (_, child, prog) {
+        if (prog == null) return child;
+        return _loading();
+      },
+      errorBuilder: (_, err, __) {
+        debugPrint('❌ AuthImage gagal load: $url');
+        // Fallback ke base64 jika tersedia
+        if (base64Data != null && base64Data!.isNotEmpty) {
+          return _Base64Image(
+            data: base64Data!,
+            height: height,
+            width: width,
+            fit: fit,
+          );
+        }
+        return _broken();
+      },
     );
   }
-}
 
-class _BrokenImage extends StatelessWidget {
-  final double? height;
-  final double? width;
-  const _BrokenImage({this.height, this.width});
+  Widget _loading() {
+    return SizedBox(
+      height: height,
+      width: width,
+      child: const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF7BCEF5),
+          strokeWidth: 2,
+        ),
+      ),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _broken() {
     return SizedBox(
       height: height,
       width: width,
       child: Container(
         color: const Color(0xFFF5F7FA),
         child: const Center(
-          child: Icon(Icons.broken_image, color: Colors.grey, size: 32),
+          child: Icon(
+            Icons.broken_image_outlined,
+            color: Colors.grey,
+            size: 36,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── _Base64Image ─────────────────────────────────────────────────────────────
+/// Render image dari base64 string (pod_data dari API response).
+/// Tidak perlu HTTP — data sudah ada di memory.
+class _Base64Image extends StatelessWidget {
+  final String data;
+  final double? height;
+  final double? width;
+  final BoxFit fit;
+
+  const _Base64Image({
+    required this.data,
+    this.height,
+    this.width,
+    this.fit = BoxFit.cover,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      final Uint8List bytes = base64Decode(data);
+      return Image.memory(
+        bytes,
+        height: height,
+        width: width,
+        fit: fit,
+        errorBuilder: (_, __, ___) => _broken(),
+      );
+    } catch (e) {
+      debugPrint('❌ Base64 decode error: $e');
+      return _broken();
+    }
+  }
+
+  Widget _broken() {
+    return SizedBox(
+      height: height,
+      width: width,
+      child: Container(
+        color: const Color(0xFFF5F7FA),
+        child: const Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            color: Colors.grey,
+            size: 36,
+          ),
         ),
       ),
     );

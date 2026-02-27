@@ -51,41 +51,51 @@ class _PhotoCarouselCardState extends State<PhotoCarouselCard> {
         ? await vm.uploadPhotoBefore(_newFile!, notes: _noteCtrl.text)
         : await vm.uploadPhotoAfter(_newFile!, notes: _noteCtrl.text);
 
+    if (!mounted) return;
     if (success) {
-      if (mounted) {
-        setState(() {
-          _newFile = null;
-          _noteCtrl.clear();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${widget.title} berhasil diupload!'),
-            backgroundColor: const Color(0xFF27AE60),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
+      setState(() {
+        _newFile = null;
+        _noteCtrl.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${widget.title} berhasil diupload!'),
+          backgroundColor: const Color(0xFF27AE60),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
           ),
-        );
-        // Jump to last page
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final pods = vm.getPodsOfType(widget.type);
-          if (pods.isNotEmpty && _pageCtrl.hasClients) {
-            _pageCtrl.jumpToPage(pods.length - 1);
-          }
-        });
-      }
+        ),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final pods = vm.getPodsOfType(widget.type);
+        if (pods.isNotEmpty && _pageCtrl.hasClients) {
+          _pageCtrl.jumpToPage(pods.length - 1);
+        }
+      });
     } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Upload gagal, coba lagi'),
-            backgroundColor: Colors.redAccent,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Upload gagal, coba lagi'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
+  }
+
+  void _openViewer(DetailWorkOrderViewModel vm, int startIndex) {
+    final pods = vm.getPodsOfType(widget.type);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PhotoViewerScreen(
+          pods: pods,
+          initialIndex: startIndex,
+          token: vm.token,
+        ),
+      ),
+    );
   }
 
   @override
@@ -101,7 +111,7 @@ class _PhotoCarouselCardState extends State<PhotoCarouselCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header
+              // ── Header ─────────────────────────────────────────────────
               Row(
                 children: [
                   Icon(widget.icon, color: const Color(0xFF7BCEF5), size: 22),
@@ -123,7 +133,7 @@ class _PhotoCarouselCardState extends State<PhotoCarouselCard> {
               ),
               const SizedBox(height: 12),
 
-              // Existing carousel
+              // ── Existing carousel ──────────────────────────────────────
               if (pods.isNotEmpty && _newFile == null) ...[
                 _PhotoCarousel(
                   pods: pods,
@@ -131,32 +141,16 @@ class _PhotoCarouselCardState extends State<PhotoCarouselCard> {
                   currentPage: _currentPage,
                   token: vm.token,
                   onPageChanged: (i) => setState(() => _currentPage = i),
-                  onTap: (idx) {
-                    final urls = pods
-                        .map((p) => p.bestUrl)
-                        .where((u) => u.isNotEmpty)
-                        .toList();
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => PhotoViewerScreen(
-                          urls: urls,
-                          initialIndex: idx,
-                          token: vm.token,
-                        ),
-                      ),
-                    );
-                  },
+                  onTap: (idx) => _openViewer(vm, idx),
                 ),
                 const SizedBox(height: 8),
                 if (pods.length > 1)
                   _DotIndicator(count: pods.length, current: _currentPage),
                 _PhotoCommentSection(pods: pods, currentPage: _currentPage),
-              ] else if (pods.isEmpty && _newFile == null) ...[
-                _PhotoPlaceholder(message: 'Belum ada foto'),
-              ],
+              ] else if (pods.isEmpty && _newFile == null)
+                const _PhotoPlaceholder(message: 'Belum ada foto'),
 
-              // New file preview
+              // ── New file preview ───────────────────────────────────────
               if (_newFile != null) ...[
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
@@ -316,9 +310,11 @@ class _PhotoCarousel extends StatelessWidget {
                 onTap: () => onTap(i),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(10),
+                  // ✅ Pass base64Data — dipakai ketika bestUrl kosong
                   child: AuthImage(
                     url: pod.bestUrl,
                     token: token,
+                    base64Data: pod.podData,
                     height: 220,
                     width: double.infinity,
                     fit: BoxFit.cover,
@@ -327,7 +323,7 @@ class _PhotoCarousel extends StatelessWidget {
               );
             },
           ),
-          // Counter
+          // Counter badge
           Positioned(
             top: 8,
             right: 8,
@@ -376,7 +372,7 @@ class _PhotoCommentSection extends StatelessWidget {
 
   const _PhotoCommentSection({required this.pods, required this.currentPage});
 
-  String _formatDateTime(String raw) {
+  String _fmtDate(String raw) {
     try {
       final dt = DateTime.parse(raw);
       return '${dt.day.toString().padLeft(2, '0')}-'
@@ -393,8 +389,8 @@ class _PhotoCommentSection extends StatelessWidget {
   Widget build(BuildContext context) {
     if (pods.isEmpty) return const SizedBox.shrink();
     final pod = pods[currentPage.clamp(0, pods.length - 1)];
-    if (pod.notes.isEmpty && pod.createdAt.isEmpty)
-      return const SizedBox.shrink();
+    final bool hasContent = pod.notes.isNotEmpty || pod.createdAt.isNotEmpty;
+    if (!hasContent) return const SizedBox.shrink();
 
     return Container(
       margin: const EdgeInsets.only(top: 8),
@@ -408,7 +404,7 @@ class _PhotoCommentSection extends StatelessWidget {
         children: [
           if (pod.createdAt.isNotEmpty)
             Text(
-              _formatDateTime(pod.createdAt),
+              _fmtDate(pod.createdAt),
               style: const TextStyle(fontSize: 11, color: Colors.grey),
             ),
           if (pod.notes.isNotEmpty) ...[
@@ -469,7 +465,7 @@ class _DotIndicator extends StatelessWidget {
 // ─── _PhotoPlaceholder ────────────────────────────────────────────────────────
 class _PhotoPlaceholder extends StatelessWidget {
   final String message;
-  const _PhotoPlaceholder({required this.message});
+  const _PhotoPlaceholder({super.key, required this.message});
 
   @override
   Widget build(BuildContext context) {

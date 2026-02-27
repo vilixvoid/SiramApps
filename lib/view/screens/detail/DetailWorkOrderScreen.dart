@@ -956,77 +956,138 @@ class _WoListCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          ...List.generate(items.length, (i) {
-            final p = items[i];
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-              decoration: BoxDecoration(
-                color: i % 2 == 0 ? Colors.white : const Color(0xFFF5F7FA),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Row(
+
+          // ── Scrollable rows: tampil penuh ≤10 item, scroll jika lebih ──
+          Builder(
+            builder: (context) {
+              const double rowHeight = 36.0;
+              const int maxVisible = 10;
+              final bool needsScroll = items.length > maxVisible;
+              final double listHeight =
+                  rowHeight *
+                  (needsScroll ? maxVisible : items.length).toDouble();
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 28,
-                    child: Text(
-                      '${i + 1}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.black54,
-                      ),
+                    height: listHeight,
+                    child: ListView.builder(
+                      physics: needsScroll
+                          ? const ClampingScrollPhysics()
+                          : const NeverScrollableScrollPhysics(),
+                      itemCount: items.length,
+                      itemBuilder: (_, i) {
+                        final p = items[i];
+                        return Container(
+                          height: rowHeight,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: i % 2 == 0
+                                ? Colors.white
+                                : const Color(0xFFF5F7FA),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 28,
+                                child: Text(
+                                  '${i + 1}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black54,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 90,
+                                child: Text(
+                                  p.materialCode,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.black54,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  p.materialDesc,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black87,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              SizedBox(
+                                width: 32,
+                                child: Text(
+                                  p.qty,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 32,
+                                child: Center(
+                                  child: p.stockCheck == 'y'
+                                      ? const Icon(
+                                          Icons.check_circle,
+                                          color: Color(0xFF27AE60),
+                                          size: 16,
+                                        )
+                                      : const Icon(
+                                          Icons.radio_button_unchecked,
+                                          color: Colors.grey,
+                                          size: 16,
+                                        ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                   ),
-                  SizedBox(
-                    width: 90,
-                    child: Text(
-                      p.materialCode,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.black54,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+
+                  // Info baris + hint scroll
+                  const SizedBox(height: 6),
+                  if (needsScroll)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        const Icon(
+                          Icons.swipe_vertical,
+                          size: 13,
+                          color: Colors.grey,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${items.length} item · geser untuk lihat semua',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Text(
+                      '${items.length} item',
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
                     ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      p.materialDesc,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 32,
-                    child: Text(
-                      p.qty,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 32,
-                    child: Center(
-                      child: p.stockCheck == 'y'
-                          ? const Icon(
-                              Icons.check_circle,
-                              color: Color(0xFF27AE60),
-                              size: 16,
-                            )
-                          : const Icon(
-                              Icons.radio_button_unchecked,
-                              color: Colors.grey,
-                              size: 16,
-                            ),
-                    ),
-                  ),
                 ],
-              ),
-            );
-          }),
+              );
+            },
+          ),
         ],
       ),
     );

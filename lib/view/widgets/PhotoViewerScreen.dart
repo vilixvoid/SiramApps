@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:siram/data/models/DetailWorkOrderModel.dart';
 import 'package:siram/view/widgets/AuthImage.dart';
 
+/// Fullscreen photo viewer.
+/// Menerima list [WorkOrderPod] agar bisa handle URL + base64 fallback.
 class PhotoViewerScreen extends StatefulWidget {
-  final List<String> urls;
+  final List<WorkOrderPod> pods;
   final int initialIndex;
   final String token;
 
   const PhotoViewerScreen({
     super.key,
-    required this.urls,
+    required this.pods,
     required this.initialIndex,
     required this.token,
   });
@@ -42,7 +45,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
         title: Text(
-          '${_current + 1} / ${widget.urls.length}',
+          '${_current + 1} / ${widget.pods.length}',
           style: const TextStyle(color: Colors.white, fontSize: 14),
         ),
         centerTitle: true,
@@ -51,22 +54,27 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         children: [
           PageView.builder(
             controller: _ctrl,
-            itemCount: widget.urls.length,
+            itemCount: widget.pods.length,
             onPageChanged: (i) => setState(() => _current = i),
-            itemBuilder: (_, i) => InteractiveViewer(
-              minScale: 0.5,
-              maxScale: 4.0,
-              child: Center(
-                child: AuthImage(
-                  url: widget.urls[i],
-                  token: widget.token,
-                  fit: BoxFit.contain,
+            itemBuilder: (_, i) {
+              final pod = widget.pods[i];
+              return InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Center(
+                  child: AuthImage(
+                    url: pod.bestUrl,
+                    token: widget.token,
+                    base64Data: pod.podData, // ✅ fallback base64
+                    fit: BoxFit.contain,
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
+
           // Dot indicator
-          if (widget.urls.length > 1)
+          if (widget.pods.length > 1)
             Positioned(
               bottom: 24,
               left: 0,
@@ -74,7 +82,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(
-                  widget.urls.length,
+                  widget.pods.length,
                   (i) => AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -90,6 +98,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
                 ),
               ),
             ),
+
           // Left arrow
           if (_current > 0)
             Positioned(
@@ -117,8 +126,9 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
                 ),
               ),
             ),
+
           // Right arrow
-          if (_current < widget.urls.length - 1)
+          if (_current < widget.pods.length - 1)
             Positioned(
               right: 8,
               top: 0,
